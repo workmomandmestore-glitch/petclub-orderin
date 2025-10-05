@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>แบบฟอร์มเติมสต็อกสินค้า</title>
+  <style>
+    :root{ --brand:#0b5cff; --muted:#f6f7fb; --text:#222; --border:#e6e8ef; }
+    *{box-sizing:border-box}
+    body{font-family:system-ui,Segoe UI,Roboto,TH Sarabun New,sans-serif;background:#fff;margin:0;color:var(--text)}
+    .wrap{max-width:920px;margin:24px auto;padding:0 16px}
+    .card{
+      background:#fff;border:1px solid var(--border);border-radius:14px;
+      box-shadow:0 2px 12px rgba(0,0,0,.04);position:relative;
+    }
+    .head{background:linear-gradient(90deg,#0b5cff,#6ea8fe);color:#fff;padding:18px 16px}
+    .head h1{font-size:20px;margin:0}
+    .body{padding:16px}
+    label{display:block;font-weight:600;margin:14px 0 6px}
+    input[type="number"],input[type="text"],input[type="date"],select{
+      width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;outline:none
+    }
+    input[type="number"]:focus,select:focus,input[type="text"]:focus,input[type="date"]:focus{border-color:#b6ccff;box-shadow:0 0 0 4px #e9f0ff}
+    input[type="date"]{cursor:pointer}
+    .row{display:grid;gap:12px}
+    @media(min-width:720px){ .row{grid-template-columns: 1.2fr 1fr}}
+    .selected{font-size:13px;color:#0a58ca;margin-top:8px}
+    .divider{height:1px;background:var(--border);margin:14px 0}
+    button{background:var(--brand);color:#fff;border:none;border-radius:10px;padding:12px 16px;font-size:16px;cursor:pointer}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .pill{display:inline-block;background:#eef3ff;color:#0b5cff;border:1px solid #dbe6ff;border-radius:999px;padding:4px 10px;font-size:12px}
+    .success{background:#f0fff4;border:1px solid #c7f0d2;color:#146c2e;padding:10px;border-radius:10px}
+    .error{background:#fff5f5;border:1px solid #ffd6d6;color:#b42318;padding:10px;border-radius:10px}
+    .remove-btn{background:#e74c3c;margin-top:10px}
+
+    /* กล่องรายการแบบเลื่อน */
+    .ac-wrap{position:relative}
+    .ac-input{width:100%}
+    .ac-list{
+      position:absolute; left:0; right:0; z-index:1000;
+      max-height:240px; overflow-y:auto;
+      background:#fff; border:1px solid var(--border); border-radius:8px;
+      margin-top:6px; box-shadow:0 4px 12px rgba(0,0,0,.15); display:none;
+    }
+    .ac-item{padding:8px 12px;line-height:1.2;cursor:pointer}
+    .ac-item:hover,.ac-item[aria-selected="true"]{background:#eef3ff}
+    .muted{color:#666;font-size:12px;margin-top:6px}
+    .fade{opacity:.7}
+    .ac-list::-webkit-scrollbar{width:10px}
+    .ac-list::-webkit-scrollbar-thumb{background:#e2e7f6;border-radius:8px}
+
+    /* ไฮไลต์ฟิลด์ที่ไม่ผ่าน */
+    .invalid{border-color:#ff8a8a !important; box-shadow:0 0 0 3px rgba(255,0,0,.12) !important}
+
+    /* ✅ หัวข้อ "รายการที่ N" */
+    .item-title{font-weight:700;margin:6px 0 10px;color:#0b5cff}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="head">
+        <h1>เติมสต็อกสินค้า</h1>
+        <div class="pill">ดึงข้อมูลอัตโนมัติจาก Google Sheet</div>
+      </div>
+      <div class="body">
+
+        <!-- เอกสารอ้างอิง (บังคับ) -->
+        <label>เอกสารอ้างอิง</label>
+        <input id="docRef" type="text" placeholder="เช่น PO-12345 หรือ INV-67890" required />
+
+        <!-- วันที่ (บังคับ) -->
+        <label style="margin-top:14px;">วันที่</label>
+        <input id="dateInput" type="date" required />
+
+        <!-- เลือกร้าน (บังคับ) -->
+        <label style="margin-top:14px;">เลือกร้าน</label>
+        <select id="shopSelect" disabled required>
+          <option value="">— กำลังโหลดข้อมูลร้าน —</option>
+        </select>
+
+        <div class="divider"></div>
+
+        <div id="items-container"></div>
+        <button style="margin-top:8px" onclick="addItem()">+ เพิ่มรายการสินค้า</button>
+        <div class="divider"></div>
+        <button id="btnSubmit" disabled>บันทึกข้อมูล</button>
+        <div id="result" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const SPREADSHEET_ID = "1ozjIx0m0A3VbBNvXfRWbpKNA1Ld5rfrt8LROYp-UeGg";
+    const ITEM_SHEET = "ListItem";
+    const SHOP_SHEET = "CompanyName";
+    const WEBHOOK_URL = "https://primary-production-884f.up.railway.app/webhook/OrderSell-PC";
+    const AC_LIMIT = 1500;
+
+    let productList = [];
+    let shopList = [];
+
+    async function fetchSheet(sheetName) {
+      try {
+        const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}`;
+        const res = await fetch(url);
+        const text = await res.text();
+        const jsonStr = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
+        const data = JSON.parse(jsonStr);
+        console.log(`✅ ดึงข้อมูล ${sheetName} สำเร็จ:`, data.table.rows?.length || 0, 'แถว');
+        return data.table.rows || [];
+      } catch (err) {
+        console.error(`❌ ดึงข้อมูล ${sheetName} ไม่สำเร็จ:`, err);
+        alert(`ไม่สามารถดึงข้อมูล ${sheetName} จาก Google Sheet\nกรุณาตรวจสอบว่า Spreadsheet เปิดแชร์สาธารณะแล้ว`);
+        return [];
+      }
+    }
+
+    async function fetchListItems() {
+      const rows = await fetchSheet(ITEM_SHEET);
+      return rows.map(r => {
+        const c = r.c || [];
+        const barcode = (c[0]?.f ?? String(c[0]?.v ?? "")).trim();
+        const name    = (c[1]?.f ?? String(c[1]?.v ?? "")).trim();
+        return { barcode, name, display: `${name} — ${barcode}` };
+      }).filter(x => x.barcode || x.name);
+    }
+
+    // ละหัวตารางคำว่า "ร้าน"/"shop"
+   async function fetchShops() {
+  const rows = await fetchSheet(SHOP_SHEET);
+
+  return rows.map((r, idx) => {
+      const c = r.c || [];
+      const val = (c[0]?.f ?? String(c[0]?.v ?? "")).trim();
+      return val;
+    })
+    .filter(s => s && s.toLowerCase() !== "ร้าน" && s.toLowerCase() !== "shop");
+}
+
+
+    function buildItemBlock(){
+      const div = document.createElement('div');
+      div.className = 'card';
+      div.innerHTML = `
+        <div class="body">
+          <div class="item-title"></div>
+          <label>ค้นหาสินค้า (ชื่อหรือบาร์โค้ด)</label>
+          <div class="ac-wrap">
+            <input class="ac-input" type="text" placeholder="พิมพ์ชื่อ เช่น Owen หรือ QR-123" autocomplete="off"/>
+            <div class="ac-list" role="listbox"></div>
+          </div>
+          <div class="muted fade">พิมพ์เพื่อค้นหา หรือกดลูกศรลงเพื่อดูรายการทั้งหมด</div>
+          <div class="selected selectedInfo" style="display:none"></div>
+
+          <div class="row">
+            <div>
+              <label>จำนวน</label>
+              <input class="qty" type="number" min="1" step="1" placeholder="เช่น 1" required />
+            </div>
+            <div>
+              <label>หมายเหตุ (ถ้ามี)</label>
+              <input class="note" type="text" placeholder="เช่น รับเข้า, คืนของ, ปรับสต็อก" />
+            </div>
+          </div>
+          <button class="remove-btn" type="button"
+            onclick="this.closest('.card').remove(); renumberItems(); checkBtnSubmit()">ลบรายการนี้</button>
+        </div>
+      `;
+      div.dataset.barcode = "";
+      div.dataset.name = "";
+      return div;
+    }
+
+    function attachAutocomplete(block){
+      const input = block.querySelector('.ac-input');
+      const list  = block.querySelector('.ac-list');
+      const selInfo = block.querySelector('.selectedInfo');
+      let activeIndex = -1;
+
+      const closeList = ()=>{ list.style.display='none'; activeIndex = -1; };
+      const openList  = ()=>{ list.style.display='block'; };
+
+      function clearSelection(){
+        block.dataset.barcode = "";
+        block.dataset.name = "";
+        block.dataset.selectedDisplay = "";
+        selInfo.style.display = 'none';
+        selInfo.textContent = "";
+        input.classList.remove('invalid');
+        checkBtnSubmit();
+      }
+
+      function render(items){
+        list.innerHTML = "";
+        if(items.length === 0){ closeList(); return; }
+        items.forEach((it)=>{
+          const el = document.createElement('div');
+          el.className = 'ac-item';
+          el.setAttribute('role','option');
+          el.textContent = it.display;
+          el.addEventListener('mousedown', (e)=>{ e.preventDefault(); choose(it); });
+          list.appendChild(el);
+        });
+        openList();
+      }
+
+      function choose(it){
+        input.value = it.display;
+        block.dataset.barcode = it.barcode;
+        block.dataset.name    = it.name;
+        block.dataset.selectedDisplay = it.display;
+        selInfo.style.display='block';
+        selInfo.textContent = `เลือกแล้ว: ${it.name} (บาร์โค้ด: ${it.barcode})`;
+        input.classList.remove('invalid');
+        closeList();
+        checkBtnSubmit();
+      }
+
+      const topList = (limit=AC_LIMIT)=> render(productList.slice(0, limit));
+
+      function search(term){
+        term = term.trim().toLowerCase();
+        if(term.length === 0){ topList(); return; }
+        const out = productList.filter(p =>
+          p.name.toLowerCase().includes(term) || p.barcode.toLowerCase().includes(term)
+        ).slice(0, AC_LIMIT);
+        render(out);
+      }
+
+      input.addEventListener('input', ()=>{
+        if(input.value.trim() === '' || input.value !== (block.dataset.selectedDisplay || '')) clearSelection();
+        search(input.value);
+      });
+      input.addEventListener('focus', ()=>{ search(input.value); });
+      input.addEventListener('blur',  ()=>{ setTimeout(closeList, 120); });
+      input.addEventListener('keydown', (e)=>{
+        if(e.key === 'Escape'){ input.value=''; clearSelection(); closeList(); return; }
+        const items = [...list.querySelectorAll('.ac-item')];
+        if((e.key === 'ArrowDown' || e.key === 'ArrowUp') && list.style.display!=='block'){ topList(); }
+        if(!items.length) return;
+        const step = (e.key === 'PageDown' || e.key === 'PageUp') ? 12 : 1;
+        if(e.key === 'ArrowDown' || e.key === 'PageDown'){ e.preventDefault(); activeIndex = Math.min(activeIndex + step, items.length - 1); }
+        else if(e.key === 'ArrowUp' || e.key === 'PageUp'){ e.preventDefault(); activeIndex = Math.max(activeIndex - step, 0); }
+        else if(e.key === 'Enter' && activeIndex >= 0){ e.preventDefault(); items[activeIndex].dispatchEvent(new MouseEvent('mousedown')); return; }
+        items.forEach((el,i)=> el.setAttribute('aria-selected', i===activeIndex ? 'true' : 'false'));
+        const cur = items[activeIndex];
+        if(cur){
+          const top = cur.offsetTop, bottom = top + cur.offsetHeight;
+          if(list.scrollTop > top) list.scrollTop = top;
+          else if(list.scrollTop + list.clientHeight < bottom) list.scrollTop = bottom - list.clientHeight;
+        }
+      });
+    }
+
+    function addItem(){
+      const container = document.getElementById('items-container');
+      const block = buildItemBlock();
+      container.appendChild(block);
+      attachAutocomplete(block);
+      renumberItems();                                   // ✅ จัดเลขทุกครั้งที่เพิ่ม
+      block.querySelector('.ac-input').focus();
+      checkBtnSubmit();
+    }
+
+    // ✅ ใส่ลำดับ "รายการที่ N" ให้ทุกบล็อก
+    function renumberItems(){
+      document.querySelectorAll('#items-container .card .item-title')
+        .forEach((el, idx) => el.textContent = `รายการที่ ${idx + 1}`);
+    }
+
+    // ตรวจความครบถ้วน
+    function validateForm(showErrors=false){
+      let ok = true;
+      const errs = [];
+      const resultDiv = document.getElementById('result');
+
+      document.querySelectorAll('.invalid').forEach(el=>el.classList.remove('invalid'));
+
+      const docRef = document.getElementById('docRef');
+      const shopSel = document.getElementById('shopSelect');
+      const dateInput = document.getElementById('dateInput');
+
+      if(!docRef.value.trim()){
+        ok = false; errs.push('กรุณากรอก "เอกสารอ้างอิง"');
+        if(showErrors) docRef.classList.add('invalid');
+      }
+      if(!dateInput.value){
+        ok = false; errs.push('กรุณาเลือก "วันที่"');
+        if(showErrors) dateInput.classList.add('invalid');
+      }
+      if(!shopSel.value){
+        ok = false; errs.push('กรุณา "เลือกร้าน"');
+        if(showErrors) shopSel.classList.add('invalid');
+      }
+
+      const blocks = [...document.querySelectorAll('#items-container .card')];
+      if(blocks.length === 0){
+        ok = false; errs.push('กรุณาเพิ่ม "รายการสินค้า" อย่างน้อย 1 รายการ');
+      }else{
+        blocks.forEach((b,idx)=>{
+          const nameInput = b.querySelector('.ac-input');
+          const qtyInput  = b.querySelector('.qty');
+          const hasItem   = !!b.dataset.barcode;
+          const qtyVal    = parseInt(qtyInput.value || '0', 10);
+
+          if(!hasItem){
+            ok = false; errs.push(`รายการที่ ${idx+1}: กรุณาเลือกสินค้า`);
+            if(showErrors) nameInput.classList.add('invalid');
+          }
+          if(!(qtyVal >= 1)){
+            ok = false; errs.push(`รายการที่ ${idx+1}: กรุณากรอกจำนวนอย่างน้อย 1`);
+            if(showErrors) qtyInput.classList.add('invalid');
+          }
+        });
+      }
+
+      if(showErrors && errs.length){
+        resultDiv.innerHTML = `<div class="error">${errs.join('<br>')}</div>`;
+      }else if(showErrors){
+        resultDiv.innerHTML = '';
+      }
+      return ok;
+    }
+
+    function checkBtnSubmit(){
+      document.getElementById('btnSubmit').disabled = !validateForm(false);
+    }
+
+    async function submitPayload(){
+      if(!validateForm(true)) return;
+
+      const shop = document.getElementById('shopSelect').value;
+      const docRef = document.getElementById('docRef').value;
+      const date = document.getElementById('dateInput').value;
+
+      const payloads = [...document.querySelectorAll('#items-container .card')].map(b=>{
+        const barcode = b.dataset.barcode || "";
+        const name    = b.dataset.name || "";
+        const qty     = parseInt(b.querySelector('.qty').value || "0", 10);
+        const note    = b.querySelector('.note').value; // ไม่บังคับ
+        return {
+          action:"stock_in",
+          shop,
+          doc_ref:docRef,
+          date,
+          barcode,
+          sku: barcode,
+          name,
+          qty,
+          note,
+          timestamp_iso:new Date().toISOString()
+        };
+      });
+
+      const resultDiv = document.getElementById('result');
+      try {
+        const resp = await fetch(WEBHOOK_URL, {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(payloads)
+        });
+        const text = await resp.text();
+        let respJson = {};
+        try { respJson = JSON.parse(text); } catch {}
+        resultDiv.innerHTML = `<div class="success">ส่งสำเร็จ 🎉<br><pre>${JSON.stringify(respJson||text,null,2)}</pre></div>`;
+      } catch (err){
+        resultDiv.innerHTML = `<div class="error">ส่งไม่สำเร็จ: ${err.message}</div>`;
+      }
+    }
+
+    document.getElementById('btnSubmit').addEventListener('click',submitPayload);
+    document.getElementById('shopSelect').addEventListener('change',checkBtnSubmit);
+    document.getElementById('docRef').addEventListener('input',checkBtnSubmit);
+    document.getElementById('dateInput').addEventListener('change',checkBtnSubmit);
+
+    (async function init(){
+      [productList, shopList] = await Promise.all([fetchListItems(), fetchShops()]);
+      const shopSel = document.getElementById('shopSelect');
+      shopSel.innerHTML = `<option value="">— เลือกร้าน —</option>` + shopList.map(s=>`<option>${s}</option>`).join('');
+      shopSel.disabled = shopList.length===0;
+      
+      // ตั้งค่าวันที่เป็นวันปัจจุบัน
+      document.getElementById('dateInput').valueAsDate = new Date();
+      
+      addItem();                // addItem() จะเรียก renumberItems() ให้อยู่แล้ว
+    })();
+  </script>
+</body>
+</html>
